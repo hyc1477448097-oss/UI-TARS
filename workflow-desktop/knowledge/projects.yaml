@@ -1,18 +1,18 @@
 # 按实际仓库和内部站点改这里，然后点界面「重新加载配置」或重启后端。
 projects:
-  - id: demo-service
-    name: 示例服务
-    repo_path: D:\work\your-repo
+  - id: hycflow-demo-service
+    name:工作流(saas前台idc1)
+    repo_path: D:\codehouse\voicegpt-html
     test:
       skip_git: true
-      branch: release/test
-      merge_from: current
-      deploy_url: https://internal.example.com/ops/services/demo
-      service_name: demo-service
-      success_hint: 运行中
+      branch: main
+      merge_from: main
+      deploy_url: https://sre.100credit.cn/service/info?id=1030&mark=voicegpt-html
+      service_name: voiceAgent前台
+      success_hint: 完成
       close_tab: false
       uitars_goal: >
-        在部署平台中找到服务 demo-service，选择当前要部署的测试分支，
+        在部署平台中找到服务 voiceAgent前台，选择当前要部署的测试分支，
         执行部署并启动。不要编造环境或分支名。完成且看到运行中状态后 finished。
     release:
       enable_git: false
