@@ -1,0 +1,29 @@
+# 按实际仓库和内部站点改这里，然后点界面「重新加载配置」或重启后端。
+projects:
+  - id: demo-service
+    name: 示例服务
+    repo_path: D:\work\your-repo
+    test:
+      skip_git: true
+      branch: release/test
+      merge_from: current
+      deploy_url: https://internal.example.com/ops/services/demo
+      service_name: demo-service
+      success_hint: 运行中
+      close_tab: false
+      uitars_goal: >
+        在部署平台中找到服务 demo-service，选择当前要部署的测试分支，
+        执行部署并启动。不要编造环境或分支名。完成且看到运行中状态后 finished。
+    release:
+      enable_git: false
+      url: https://internal.example.com/ops/release/demo
+      service_name: demo-service
+      env: production
+      form:
+        变更说明: "{{ticket}}"
+        环境: production
+      success_hint: 发布成功
+      close_tab: false
+      uitars_goal: >
+        打开发布页，找到服务 demo-service，环境选择 production，
+        按给定表单字段填写后提交发布。不要更改环境名。看到发布成功后 finished。
