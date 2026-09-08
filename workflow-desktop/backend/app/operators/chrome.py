@@ -1,13 +1,123 @@
 from __future__ import annotations
 
 import ast
-from typing import Any
+import asyncio
+import sys
+import threading
+import urllib.error
+import urllib.request
+from collections.abc import Coroutine
+from functools import wraps
+from typing import Any, TypeVar
 
 from playwright.async_api import Browser, Page, Playwright, async_playwright
+
+T = TypeVar("T")
 
 
 class ChromeError(RuntimeError):
     pass
+
+
+def _exc_text(exc: BaseException) -> str:
+    text = str(exc).strip()
+    if text:
+        return f"{type(exc).__name__}: {text}"
+    return type(exc).__name__
+
+
+class _PlaywrightScheduler:
+    """Windows + uvicorn --reload 使用 SelectorEventLoop，无法 create_subprocess。
+
+    Playwright 驱动必须在 ProactorEventLoop 上启动；所有 Page/Browser 调用也要在同一 loop。
+    """
+
+    def __init__(self) -> None:
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def _needs_sidecar(self) -> bool:
+        if sys.platform != "win32":
+            return False
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return True
+        return not isinstance(loop, asyncio.ProactorEventLoop)
+
+    def ensure(self) -> None:
+        if not self._needs_sidecar():
+            return
+        with self._lock:
+            if self._loop is not None:
+                return
+            ready = threading.Event()
+
+            def _run() -> None:
+                loop = asyncio.ProactorEventLoop()
+                asyncio.set_event_loop(loop)
+                self._loop = loop
+                ready.set()
+                loop.run_forever()
+
+            self._thread = threading.Thread(
+                target=_run, name="playwright-proactor", daemon=True
+            )
+            self._thread.start()
+            if not ready.wait(timeout=10):
+                raise ChromeError("无法启动 Playwright 事件循环（Windows Proactor）")
+
+    async def run(self, coro: Coroutine[Any, Any, T]) -> T:
+        self.ensure()
+        if self._loop is None:
+            return await coro
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is self._loop:
+            return await coro
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        try:
+            return await asyncio.wrap_future(future)
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            future.cancel()
+            raise
+
+
+_scheduler = _PlaywrightScheduler()
+
+
+def _pw_method(fn):
+    @wraps(fn)
+    async def wrapper(self, *args, **kwargs):
+        return await _scheduler.run(fn(self, *args, **kwargs))
+
+    return wrapper
+
+
+def _assert_cdp_available(cdp_url: str) -> None:
+    version_url = cdp_url.rstrip("/") + "/json/version"
+    try:
+        with urllib.request.urlopen(version_url, timeout=3) as resp:
+            if getattr(resp, "status", 200) >= 400:
+                raise ChromeError(
+                    f"Chrome CDP 返回 HTTP {resp.status}（{version_url}）。"
+                    "请用 --remote-debugging-port 启动已登录的 Chrome。"
+                )
+    except ChromeError:
+        raise
+    except urllib.error.URLError as exc:
+        raise ChromeError(
+            f"无法连接 Chrome CDP ({cdp_url})。请先用 "
+            f"--remote-debugging-port 启动已登录的 Chrome（建议独立 "
+            f'--user-data-dir）。探测 {version_url} 失败: {_exc_text(exc)}'
+        ) from exc
+    except Exception as exc:
+        raise ChromeError(
+            f"探测 Chrome CDP ({version_url}) 失败: {_exc_text(exc)}"
+        ) from exc
 
 
 class ChromeOperator:
@@ -25,15 +135,22 @@ class ChromeOperator:
         return self._page
 
     async def connect(self) -> None:
+        _assert_cdp_available(self.cdp_url)
         try:
-            self._pw = await async_playwright().start()
-            self._browser = await self._pw.chromium.connect_over_cdp(self.cdp_url)
+            await _scheduler.run(self._connect_pw())
+        except ChromeError:
+            raise
         except Exception as exc:
             raise ChromeError(
-                f"无法连接 Chrome CDP ({self.cdp_url})。请先用 "
-                f"--remote-debugging-port 启动已登录的 Chrome。原始错误: {exc}"
+                f"已探测到 Chrome CDP ({self.cdp_url})，但 Playwright 连接失败: "
+                f"{_exc_text(exc)}"
             ) from exc
 
+    async def _connect_pw(self) -> None:
+        self._pw = await async_playwright().start()
+        self._browser = await self._pw.chromium.connect_over_cdp(self.cdp_url)
+
+    @_pw_method
     async def open_tab(self, url: str) -> str:
         if self._browser is None:
             await self.connect()
@@ -47,12 +164,14 @@ class ChromeOperator:
         await self._page.wait_for_timeout(800)
         return self._page.url
 
+    @_pw_method
     async def screenshot_png(self) -> bytes:
         try:
             return await self.page.screenshot(type="png", scale="css")
         except TypeError:
             return await self.page.screenshot(type="png")
 
+    @_pw_method
     async def viewport(self) -> tuple[int, int]:
         size = self.page.viewport_size
         if size:
@@ -62,12 +181,14 @@ class ChromeOperator:
         )
         return int(box["w"]), int(box["h"])
 
+    @_pw_method
     async def page_text(self) -> str:
         try:
             return await self.page.inner_text("body")
         except Exception:
             return ""
 
+    @_pw_method
     async def execute(self, action: dict[str, Any]) -> str:
         action_type = (action.get("action_type") or "").lower()
         inputs = action.get("action_inputs") or {}
@@ -140,6 +261,7 @@ class ChromeOperator:
 
         return f"unrecognized:{action_type}"
 
+    @_pw_method
     async def close_tab(self) -> None:
         if self._opened_page and self._page is not None:
             try:
@@ -148,6 +270,7 @@ class ChromeOperator:
                 pass
         self._page = None
 
+    @_pw_method
     async def disconnect(self) -> None:
         # 不关闭用户的 Chrome，只断开 Playwright 连接；是否关 Tab 由 close_tab 决定
         self._page = None

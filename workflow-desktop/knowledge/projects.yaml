@@ -1,14 +1,14 @@
 # 按实际仓库和内部站点改这里，然后点界面「重新加载配置」或重启后端。
 projects:
   - id: hycflow-demo-service
-    name:工作流(saas前台idc1)
-    repo_path: D:\codehouse\voicegpt-html
+    name: "工作流(saas前台idc1)"
+    repo_path: "D:/codehouse/voicegpt-html"
     test:
       skip_git: true
       branch: main
       merge_from: main
-      deploy_url: https://sre.100credit.cn/service/info?id=1030&mark=voicegpt-html
-      service_name: voiceAgent前台
+      deploy_url: "https://sre.100credit.cn/service/info?id=1030&mark=voicegpt-html"
+      service_name: "voiceAgent前台"
       success_hint: 完成
       close_tab: false
       uitars_goal: >

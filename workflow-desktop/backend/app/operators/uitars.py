@@ -63,7 +63,7 @@ async def infer_action(
     )
     response = await llm.ainvoke([message])
     raw = (response.content or "").strip()
-    raw = _strip_fences(raw)
+    raw = _normalize_model_output(_strip_fences(raw))
     try:
         parsed = parse_action_to_structure_output(
             raw,
@@ -73,10 +73,29 @@ async def infer_action(
             model_type="doubao",
         )
     except Exception as exc:
-        raise UITARSError(f"无法解析模型输出，已停止以免误点击: {exc}", raw=raw) from exc
+        raise UITARSError(
+            f"无法解析模型输出，已停止以免误点击: {exc}\n模型输出:\n{raw or '(空)'}",
+            raw=raw,
+        ) from exc
     if not parsed:
         raise UITARSError("模型没有返回可执行动作", raw=raw)
     return parsed, raw
+
+
+_KNOWN_ACTIONS = (
+    "click",
+    "left_double",
+    "right_single",
+    "drag",
+    "hotkey",
+    "type",
+    "scroll",
+    "wait",
+    "finished",
+    "hover",
+    "left_single",
+    "select",
+)
 
 
 def _strip_fences(text: str) -> str:
@@ -85,3 +104,23 @@ def _strip_fences(text: str) -> str:
         text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
         text = re.sub(r"\n?```$", "", text)
     return text.strip()
+
+
+def _normalize_model_output(text: str) -> str:
+    """豆包偶尔只输出 wait() / finished()，解析器要求必须带 Action: 前缀。"""
+    text = text.strip()
+    if "Action:" in text:
+        return text
+    names = "|".join(_KNOWN_ACTIONS)
+    match = re.search(
+        rf"(?:^|\n)\s*((?:{names})\s*\(.*\))\s*$",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return text
+    action = match.group(1).strip()
+    prefix = text[: match.start(1)].strip()
+    if prefix:
+        return f"{prefix}\nAction: {action}"
+    return f"Action: {action}"
