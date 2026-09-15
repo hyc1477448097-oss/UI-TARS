@@ -1,7 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import uuid
 from datetime import datetime
 from typing import Any
@@ -168,3 +169,49 @@ def screenshot_dir(run_id: str):
     path = RUNS_DIR / run_id
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def delete_run(run_id: str) -> bool:
+    """删除单个 run 及其关联的事件和截图。"""
+    with SessionLocal() as session:
+        row = session.get(Run, run_id)
+        if row is None:
+            return False
+        # 禁止删除正在运行的 run
+        if row.status in ACTIVE_STATUSES:
+            raise RuntimeError(f"无法删除运行中的任务: {run_id} ({row.status})")
+        # 删除关联的事件
+        session.query(RunEvent).filter(RunEvent.run_id == run_id).delete()
+        session.delete(row)
+        session.commit()
+    # 删除截图目录及文件
+    run_dir = RUNS_DIR / run_id
+    if run_dir.exists():
+        shutil.rmtree(run_dir)
+    return True
+
+
+def cleanup_runs(older_than_hours: int = 24, limit: int = 100) -> int:
+    """批量清理已完成的旧运行记录。"""
+    cutoff = datetime.utcnow() - __import__("datetime", fromlist=["timedelta"]).timedelta(hours=older_than_hours)
+    with SessionLocal() as session:
+        old_runs = (
+            session.query(Run)
+            .filter(Run.status.notin_(ACTIVE_STATUSES))
+            .filter(Run.finished_at < cutoff)
+            .order_by(Run.finished_at.asc())
+            .limit(limit)
+            .all()
+        )
+        count = len(old_runs)
+        for row in old_runs:
+            session.query(RunEvent).filter(RunEvent.run_id == row.id).delete()
+            session.delete(row)
+        session.commit()
+    # 删除对应的截图目录
+    if count:
+        for row in old_runs:
+            run_dir = RUNS_DIR / row.id
+            if run_dir.exists():
+                shutil.rmtree(run_dir)
+    return count

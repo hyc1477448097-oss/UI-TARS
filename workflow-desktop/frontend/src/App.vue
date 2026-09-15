@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { computed, onMounted, ref } from "vue";
 
 const projects = ref([]);
@@ -138,6 +138,47 @@ async function abort() {
   await fetch(`/api/runs/${runId.value}/abort`, { method: "POST" });
 }
 
+async function deleteCurrentRun() {
+  if (!runId.value || running.value) return;
+  if (!confirm("确认删除当前运行记录？此操作不可恢复。")) return;
+  try {
+    const res = await fetch(`/api/runs/${runId.value}`, { method: "DELETE" });
+    if (res.ok) {
+      logs.value = [];
+      screenshot.value = "";
+      runId.value = "";
+      status.value = "idle";
+      errorText.value = "";
+      confirmText.value = "";
+      pushLog("已删除当前运行记录");
+    } else {
+      const data = await res.json();
+      pushLog(data.detail || "删除失败", "error");
+    }
+  } catch (err) {
+    pushLog(err.message, "error");
+  }
+}
+
+async function cleanupHistory() {
+  const hours = prompt("清理多少小时前已完成的运行记录？", "24");
+  if (!hours) return;
+  if (!confirm(`确认清理 ${hours} 小时前已完成的运行记录？此操作不可恢复。`)) return;
+  try {
+    const res = await fetch(`/api/runs/cleanup?older_than_hours=${parseInt(hours)}&limit=100`, {
+      method: "POST",
+    });
+    const data = await res.json();
+    if (res.ok) {
+      pushLog(`已清理 ${data.deleted} 条历史运行记录`, "cleanup");
+    } else {
+      pushLog(data.detail || "清理失败", "error");
+    }
+  } catch (err) {
+    pushLog(err.message, "error");
+  }
+}
+
 onMounted(loadProjects);
 </script>
 
@@ -170,13 +211,15 @@ onMounted(loadProjects);
           上线
         </button>
         <button :disabled="!running" @click="abort">中止</button>
+        <button :disabled="running || !runId" @click="deleteCurrentRun">删除当前</button>
+        <button class="ghost" :disabled="running" @click="cleanupHistory">清理历史</button>
         <button class="ghost" :disabled="running" @click="reloadKnowledge">重新加载配置</button>
       </div>
     </section>
 
     <p v-if="selected" class="hint">
-      测试页 {{ selected.config.test?.deploy_url || "未配置" }} ·
-      上线页 {{ selected.config.release?.url || "未配置" }}
+      测试项: {{ selected.config.test?.deploy_url || "未配置" }} ·
+      上线项: {{ selected.config.release?.url || "未配置" }}
     </p>
     <p v-if="errorText" class="error">{{ errorText }}</p>
 

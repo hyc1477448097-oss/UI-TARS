@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
@@ -13,7 +13,9 @@ from app.graph.workflow import run_workflow
 from app.knowledge import get_project, list_projects, reload_knowledge
 from app.models import init_db
 from app.runtime import (
+    cleanup_runs,
     create_run,
+    delete_run,
     get_run,
     has_active_run,
     hub,
@@ -94,6 +96,23 @@ def api_get_run(run_id: str):
     if data is None:
         raise HTTPException(404, "运行记录不存在")
     return data
+
+
+@app.delete("/api/runs/{run_id}")
+async def api_delete_run(run_id: str):
+    try:
+        deleted = delete_run(run_id)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    if not deleted:
+        raise HTTPException(404, "运行记录不存在")
+    return {"ok": True}
+
+
+@app.post("/api/runs/cleanup")
+async def api_cleanup(older_than_hours: int = 24, limit: int = 100):
+    count = cleanup_runs(older_than_hours=older_than_hours, limit=limit)
+    return {"ok": True, "deleted": count}
 
 
 @app.post("/api/runs/{run_id}/confirm")
