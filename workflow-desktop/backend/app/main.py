@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -10,7 +11,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.graph.workflow import run_workflow
-from app.knowledge import get_project, list_projects, reload_knowledge
+from app.knowledge import find_project_by_query, get_project, list_projects, reload_knowledge
 from app.models import init_db
 from app.runtime import (
     cleanup_runs,
@@ -21,13 +22,20 @@ from app.runtime import (
     hub,
     screenshot_dir,
 )
+from app.vectorstore import close_vectorstore, init_vectorstore, is_ready, search_projects
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
+    vector_ok = init_vectorstore()
     reload_knowledge()
+    if not vector_ok:
+        logger.warning("向量搜索服务未就绪，语义检索将不可用")
     yield
+    close_vectorstore()
 
 
 app = FastAPI(title="Workflow Desktop", lifespan=lifespan)
@@ -46,14 +54,58 @@ class StartRunBody(BaseModel):
     extras: dict = Field(default_factory=dict)
 
 
+class SearchBody(BaseModel):
+    query: str
+    kind: str | None = None
+    limit: int = Field(default=5, ge=1, le=20)
+
+
 @app.get("/api/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "vector_search": is_ready()}
 
 
 @app.get("/api/projects")
 def api_projects():
     return {"projects": list_projects()}
+
+
+@app.post("/api/projects/search")
+def api_search_projects(body: SearchBody):
+    if not is_ready():
+        raise HTTPException(503, "向量搜索服务未就绪，请检查嵌入模型配置")
+    if body.kind is not None and body.kind not in {"test", "release"}:
+        raise HTTPException(400, "kind 必须是 test、release 或空")
+    try:
+        results = search_projects(query=body.query, kind=body.kind, limit=body.limit)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+    # 用 SQLite 补全每条命中的完整项目配置
+    enriched = []
+    for r in results:
+        project = get_project(r["project_id"])
+        if project is None:
+            continue
+        enriched.append({**r, "config": project["config"]})
+    return {"results": enriched}
+
+
+@app.post("/api/projects/resolve")
+def api_resolve_project(body: SearchBody):
+    """按自然语言 query 解析出单个最匹配的项目，供工作流目标检索使用。
+
+    kind 默认 test；无足够相似命中时返回 404，调用方应回退到精确选择。
+    """
+    if not is_ready():
+        raise HTTPException(503, "向量搜索服务未就绪，请检查嵌入模型配置")
+    if body.kind is None:
+        body = body.model_copy(update={"kind": "test"})
+    if body.kind not in {"test", "release"}:
+        raise HTTPException(400, "kind 必须是 test 或 release")
+    project = find_project_by_query(query=body.query, kind=body.kind)
+    if project is None:
+        raise HTTPException(404, "未找到足够相似的项目，请改用精确选择")
+    return {"project": project, "kind": body.kind}
 
 
 @app.post("/api/knowledge/reload")

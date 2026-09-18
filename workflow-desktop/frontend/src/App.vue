@@ -11,6 +11,9 @@ const logs = ref([]);
 const screenshot = ref("");
 const confirmText = ref("");
 const errorText = ref("");
+const searchQuery = ref("");
+const searchResults = ref([]);
+let searchTimer = null;
 let socket = null;
 
 const selected = computed(() => projects.value.find((p) => p.id === projectId.value));
@@ -45,6 +48,40 @@ async function reloadKnowledge() {
   if (projectId.value && !projects.value.some((p) => p.id === projectId.value)) {
     projectId.value = projects.value[0]?.id || "";
   }
+}
+
+function debouncedSearch() {
+  if (searchTimer) clearTimeout(searchTimer);
+  if (!searchQuery.value.trim()) {
+    searchResults.value = [];
+    return;
+  }
+  searchTimer = setTimeout(runSearch, 300);
+}
+
+async function runSearch() {
+  const query = searchQuery.value.trim();
+  if (!query) {
+    searchResults.value = [];
+    return;
+  }
+  try {
+    const res = await fetch("/api/projects/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, limit: 5 }),
+    });
+    const data = await res.json();
+    searchResults.value = res.ok ? data.results || [] : [];
+  } catch {
+    searchResults.value = [];
+  }
+}
+
+function pickResult(r) {
+  projectId.value = r.project_id;
+  searchQuery.value = "";
+  searchResults.value = [];
 }
 
 function pushLog(message, step = "") {
@@ -193,6 +230,27 @@ onMounted(loadProjects);
     </header>
 
     <section class="controls">
+      <label class="search">
+        语义搜索（输入自然语言匹配项目）
+        <input
+          v-model="searchQuery"
+          @input="debouncedSearch"
+          placeholder="例如：部署前台服务到测试环境"
+          :disabled="running"
+        />
+      </label>
+      <div v-if="searchResults.length" class="search-results">
+        <div
+          v-for="r in searchResults"
+          :key="r.project_id + r.kind"
+          class="search-hit"
+          @click="pickResult(r)"
+        >
+          <span class="hit-name">{{ r.name }}</span>
+          <span class="hit-kind">{{ r.kind === "test" ? "测试" : "上线" }}</span>
+          <span class="hit-score">{{ Math.round((r.score || 0) * 100) }}%</span>
+        </div>
+      </div>
       <label>
         项目
         <select v-model="projectId" :disabled="running">
@@ -334,6 +392,47 @@ input {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.search {
+  grid-column: 1 / -1;
+}
+
+.search-results {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.search-hit {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  background: var(--bg-inset);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.search-hit:hover {
+  border-color: var(--accent-dim);
+}
+
+.hit-name {
+  flex: 1;
+  color: var(--text);
+}
+
+.hit-kind {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.hit-score {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 button {

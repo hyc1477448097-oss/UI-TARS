@@ -9,6 +9,11 @@ KNOWLEDGE_DIR = ROOT_DIR / "knowledge"
 DATA_DIR = ROOT_DIR / "data"
 DB_PATH = DATA_DIR / "workflow.db"
 RUNS_DIR = DATA_DIR / "runs"
+QDRANT_DIR = DATA_DIR / "qdrant"
+EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
+EMBEDDING_DIM = 512
+# bge-small-zh-v1.5 检索时为 query 加的前缀，文档侧不加
+EMBEDDING_QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章："
 
 
 class Settings(BaseSettings):
