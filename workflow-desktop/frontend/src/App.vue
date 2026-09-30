@@ -130,7 +130,11 @@ async function start(kind) {
 
 async function confirm() {
   if (!runId.value) return;
-  await fetch(`/api/runs/${runId.value}/confirm`, { method: "POST" });
+  const res = await fetch(`/api/runs/${runId.value}/confirm`, { method: "POST" });
+  if (res.ok) {
+    confirmText.value = "";
+    status.value = "running";
+  }
 }
 
 async function abort() {
